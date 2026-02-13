@@ -1,0 +1,53 @@
+# ASP.NET Core
+# Build and test ASP.NET Core projects targeting .NET Core.
+# Add steps that run tests, create a NuGet package, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+
+trigger:
+- master
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  buildConfiguration: 'Release'
+  projectPath: $(Build.SourcesDirectory)/WebApp/WebApp.csproj
+
+steps:
+# - script: dotnet build --configuration $(buildConfiguration)
+#   displayName: 'dotnet build $(buildConfiguration)'
+
+- script: echo $(Build.SourcesDirectory)
+
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'build'
+    projects: '$(projectPath)'
+    arguments: '--configuration $(buildConfiguration)'
+
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'publish'
+    publishWebProjects: true
+    arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+
+- task: FileTransform@2
+  inputs:
+    folderPath: '$(Build.ArtifactStagingDirectory)/WebApp.zip'
+    enableXmlTransform: false
+    jsonTargetFiles: '**\appsettings.json'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'drop'
+    publishLocation: 'Container'
+
+- task: AzureWebApp@1
+  inputs:
+    azureSubscription: 'Azure subscription 1(1)(2b28fc6e-b5bc-4462-a2c8-3fd7b166c6c3)'
+    appType: 'webApp'
+    appName: 'GsECommerceProject'
+    package: '$(Build.ArtifactStagingDirectory)/WebApp.zip'
+    deploymentMethod: 'auto'
+
