@@ -1,0 +1,219 @@
+﻿# What this does
+# - The pipeline automatically runs whenever code is pushed to the master branch.
+# - Uses Microsoft‑hosted Ubuntu agents, which are fast, clean, and ideal for .NET builds.
+
+trigger:
+- master
+
+pool:
+  vmImage: ubuntu-latest
+
+# Why these variables matter
+# - buildConfiguration: Ensures consistent Release builds.
+# - projectPath: Points to your main .csproj file.
+# - artifactName: Standard name for published artifacts.
+# - webAppName: Azure App Service name.
+# - packagePath: Location of the ZIP package after publishing.
+# - stagingSlot: Enables safe deployments using deployment slots.
+# - healthCheckEndpoint: Used for automated health validation.
+
+
+variables:
+  buildConfiguration: 'Release'
+  projectPath: '$(Build.SourcesDirectory)/WebApp/WebApp.csproj'
+  artifactName: 'drop'
+  webAppName: 'GsECommerceProject'
+  packagePath: '$(Pipeline.Workspace)/drop/WebApp.zip'
+  stagingSlot: 'staging'
+  healthCheckEndpoint: 'https://<your-app-url>/health'
+
+stages:
+
+# ============================
+#   STAGE 1 — BUILD & TEST
+# ============================
+- stage: Build
+  displayName: "Build & Test"
+  jobs:
+  - job: BuildJob
+    steps:
+
+    - task: DotNetCoreCLI@2
+      displayName: "Restore Packages"
+      inputs:
+        command: 'restore'
+        projects: '$(projectPath)'
+
+    - task: DotNetCoreCLI@2
+      displayName: "Build Project"
+      inputs:
+        command: 'build'
+        projects: '$(projectPath)'
+        arguments: '--configuration $(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: "Run Unit Tests"
+      inputs:
+        command: 'test'
+        projects: '**/*Tests.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-build'
+        publishTestResults: true
+
+    - task: DotNetCoreCLI@2
+      displayName: "Publish Web App"
+      inputs:
+        command: 'publish'
+        publishWebProjects: true
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+
+    - task: FileTransform@2
+      displayName: "Apply JSON Transforms"
+      inputs:
+        folderPath: '$(Build.ArtifactStagingDirectory)'
+        jsonTargetFiles: '**/appsettings.json'
+
+    - task: PublishBuildArtifacts@1
+      displayName: "Publish Artifacts"
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: '$(artifactName)'
+        publishLocation: 'Container'
+
+
+# ============================
+#   STAGE 2 — DEPLOY TO STAGING
+# ============================
+- stage: Deploy_Staging
+  displayName: "Deploy to Staging Slot"
+  dependsOn: Build
+  jobs:
+  - deployment: DeployStaging
+    environment: 'staging'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - download: current
+            artifact: $(artifactName)
+# Retrieves the published ZIP file
+          - task: AzureKeyVault@2
+            displayName: "Fetch Secrets from Key Vault"
+            inputs:
+              azureSubscription: 'Azure subscription 1(1)(2b28fc6e-b5bc-4462-a2c8-3fd7b166c6c3)'
+              KeyVaultName: 'YourKeyVaultName'
+              SecretsFilter: '*'
+# Securely injects secrets such as:
+# - Connection strings
+# - API keys
+# - Passwords
+
+          - task: AzureWebApp@1
+            displayName: "Deploy to Staging Slot"
+            inputs:
+              azureSubscription: 'Azure subscription 1(1)(2b28fc6e-b5bc-4462-a2c8-3fd7b166c6c3)'
+              appType: 'webApp'
+              appName: '$(webAppName)'
+              deployToSlotOrASE: true
+              resourceGroupName: 'YourResourceGroup'
+              slotName: '$(stagingSlot)'
+              package: '$(packagePath)'
+# Deploys the ZIP package to the staging slot.
+          # -----------------------------
+          # HEALTH CHECK AFTER STAGING
+          # -----------------------------
+          - script: |
+              echo "Running health check..."
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$(healthCheckEndpoint)")
+              echo "Health check status: $STATUS"
+              if [ "$STATUS" -ne 200 ]; then
+                echo "Health check failed"
+                exit 1
+              fi
+            displayName: "Health Check (Staging)"
+# What this does
+# - Calls your /health endpoint.
+# - Expects HTTP 200.
+# - If not 200 → pipeline fails immediately.
+# This prevents bad builds from reaching production.
+
+          # -----------------------------
+          # EMAIL NOTIFICATION (STAGING)
+          # -----------------------------
+          - task: SendEmail@1
+            displayName: "Notify: Staging Deployment Successful"
+            inputs:
+              To: "team@yourcompany.com"
+              Subject: "Staging Deployment Successful"
+              Body: "The staging deployment for $(webAppName) completed successfully and passed health checks."
+# Sends an email to your team confirming:
+# - Deployment succeeded
+# - Health check passed
+# This keeps everyone informed.
+
+
+# ============================
+#   STAGE 3 — APPROVAL GATE
+# ============================
+- stage: Approval
+  displayName: "Manual Approval Before Production"
+  dependsOn: Deploy_Staging
+  jobs:
+  - job: WaitForApproval
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      inputs:
+        instructions: "Validate staging environment before approving production deployment."
+        onTimeout: 'reject'
+        timeout: '1d'
+
+
+# ============================
+#   STAGE 4 — DEPLOY TO PROD
+# ============================
+- stage: Deploy_Prod
+  displayName: "Deploy to Production"
+  dependsOn: Approval
+  jobs:
+  - deployment: DeployProd
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - download: current
+            artifact: $(artifactName)
+
+          - task: AzureWebApp@1
+            displayName: "Deploy to Production"
+            inputs:
+              azureSubscription: 'Azure subscription 1(1)(2b28fc6e-b5bc-4462-a2c8-3fd7b166c6c3)'
+              appType: 'webApp'
+              appName: '$(webAppName)'
+              package: '$(packagePath)'
+              deploymentMethod: 'auto'
+
+          # -----------------------------
+          # HEALTH CHECK AFTER PROD
+          # -----------------------------
+          - script: |
+              echo "Running production health check..."
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$(healthCheckEndpoint)")
+              echo "Health check status: $STATUS"
+              if [ "$STATUS" -ne 200 ]; then
+                echo "Production health check failed"
+                exit 1
+              fi
+            displayName: "Health Check (Production)"
+
+          # -----------------------------
+          # EMAIL NOTIFICATION (PROD)
+          # -----------------------------
+          - task: SendEmail@1
+            displayName: "Notify: Production Deployment Successful"
+            inputs:
+              To: "team@yourcompany.com"
+              Subject: "Production Deployment Successful"
+              Body: "The production deployment for $(webAppName) completed successfully and passed health checks."
