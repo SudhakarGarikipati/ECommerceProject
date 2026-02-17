@@ -2,13 +2,24 @@
 # Build and test ASP.NET Core projects targeting .NET Core.
 # Add steps that run tests, create a NuGet package, deploy, and more:
 # https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+# This YAML pipeline performs the following tasks:
+# - Triggers on changes to the master branch
+# - Uses Ubuntu build agents
+# - Builds the ASP.NET Core project
+# - Publishes the application to the artifact staging directory
+# - Applies JSON transformations (e.g., appsettings.json)
+# - Publishes build artifacts
+# - Deploys the application to Azure App Service
 
+# The pipeline runs automatically whenever code is pushed to the master branch.
 trigger:
 - master
-
+# Uses the latest Ubuntu image hosted by Microsoft.
 pool:
   vmImage: ubuntu-latest
-
+# Defines:
+# - Build configuration (Release)
+# - Path to the main project file
 variables:
   buildConfiguration: 'Release'
   projectPath: $(Build.SourcesDirectory)/WebApp/WebApp.csproj
@@ -19,30 +30,35 @@ steps:
 
 - script: echo $(Build.SourcesDirectory)
 
+# Compiles the ASP.NET Core project.
 - task: DotNetCoreCLI@2
   inputs:
     command: 'build'
     projects: '$(projectPath)'
     arguments: '--configuration $(buildConfiguration)'
-
+    
+# Creates a publish‑ready output in the artifact staging directory.
 - task: DotNetCoreCLI@2
   inputs:
     command: 'publish'
     publishWebProjects: true
     arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
-
+    
+# Applies JSON transformations (e.g., appsettings for different environments)
 - task: FileTransform@2
   inputs:
     folderPath: '$(Build.ArtifactStagingDirectory)/WebApp.zip'
     enableXmlTransform: false
     jsonTargetFiles: '**\appsettings.json'
-
+    
+# Makes the published output available for deployment or download.
 - task: PublishBuildArtifacts@1
   inputs:
     PathtoPublish: '$(Build.ArtifactStagingDirectory)'
     ArtifactName: 'drop'
     publishLocation: 'Container'
 
+# Deploys the ZIP package to the Azure App Service using Zip Deploy.
 - task: AzureWebApp@1
   inputs:
     azureSubscription: 'Azure subscription 1(1)(2b28fc6e-b5bc-4462-a2c8-3fd7b166c6c3)'
